@@ -1,29 +1,49 @@
 import streamlit as st
 import pandas as pd
-from model_trainer import ModelTrainer
-from data_processor import DataProcessor
-from visualizer import plot_model_comparisons, plot_feature_importance
+import numpy as np
+import joblib
+import os
+import plotly.graph_objects as go
+
+def load_models():
+    """Load all pre-trained models and encoders."""
+    models = {}
+    encoders = joblib.load('models/label_encoders.pkl')
+    feature_names = joblib.load('models/feature_names.pkl')
+    
+    # Load models for each split ratio
+    for split in [80, 70, 60]:
+        split_models = {}
+        for model_name in ['logistic', 'svm', 'dt', 'rf', 'gbm', 'knn', 'nb', 'voting', 'stacking']:
+            model_path = f'models/{model_name}_split_{split}.pkl'
+            if os.path.exists(model_path):
+                split_models[model_name] = joblib.load(model_path)
+        models[f"{split}-{100-split}"] = split_models
+    
+    return models, encoders, feature_names
+
+def preprocess_input(input_data, encoders, feature_names):
+    """Preprocess input data using saved encoders."""
+    df = pd.DataFrame([input_data])
+    
+    # Apply encoding
+    for column, encoder in encoders.items():
+        if column in df.columns:
+            df[column] = encoder.transform(df[column])
+    
+    # Ensure columns are in the correct order
+    return df[feature_names]
 
 def main():
     st.title("Depression Screening Application")
     
-    # Initialize processors
-    data_processor = DataProcessor()
-    trainer = ModelTrainer()
-    
-    # Sidebar for data upload
-    st.sidebar.header("Training Data")
-    uploaded_file = st.sidebar.file_uploader("Upload training dataset", type=["csv"])
-    
-    if uploaded_file is not None:
-        # Load and preprocess training data
-        train_data = pd.read_csv(uploaded_file)
-        processed_train_data = data_processor.preprocess_data(train_data)
-        
-        # Main input form
-        st.header("Please Answer the Following Questions")
+    try:
+        # Load models and encoders
+        models, encoders, feature_names = load_models()
         
         # Create input form
+        st.header("Please Answer the Following Questions")
+        
         with st.form("screening_form"):
             gender = st.selectbox("Gender", ["Male", "Female"])
             age = st.number_input("Age", min_value=18, max_value=100, value=25)
@@ -62,25 +82,40 @@ def main():
                 'Family History of Mental Illness': family_history
             }
             
-            # Process input data
-            processed_input = data_processor.preprocess_input(input_data)
+            # Process input
+            processed_input = preprocess_input(input_data, encoders, feature_names)
             
-            # Get predictions for different train-test splits
-            split_ratios = [(80, 20), (70, 30), (60, 40)]
+            # Get predictions from all models and splits
             results = {}
-            
-            for train_size, test_size in split_ratios:
-                predictions = trainer.predict_all_models(
-                    processed_input, 
-                    train_size/100
-                )
-                results[f"{train_size}-{test_size}"] = predictions
+            for split, split_models in models.items():
+                split_results = {}
+                for name, model in split_models.items():
+                    prob = model.predict_proba(processed_input)[0][1]
+                    split_results[name] = prob
+                results[split] = split_results
             
             # Display results
             st.header("Analysis Results")
             
-            # Plot results
-            fig = plot_model_comparisons(results)
+            # Create heatmap
+            splits = list(results.keys())
+            model_names = list(results[splits[0]].keys())
+            probabilities = [[results[split][model] for split in splits] for model in model_names]
+            
+            fig = go.Figure(data=go.Heatmap(
+                z=probabilities,
+                x=splits,
+                y=model_names,
+                colorscale='RdYlBu',
+                colorbar=dict(title='Probability')
+            ))
+            
+            fig.update_layout(
+                title='Depression Risk Probability Across Models and Splits',
+                xaxis_title='Train-Test Split',
+                yaxis_title='Model'
+            )
+            
             st.plotly_chart(fig)
             
             # Display numerical results
@@ -98,13 +133,12 @@ def main():
                 of depression, please consult with a qualified mental health professional.
             """)
             
-            # Add helpful resources
-            st.info("""
-                **Mental Health Resources:**
-                - National Suicide Prevention Lifeline (US): 1-800-273-8255
-                - Crisis Text Line: Text HOME to 741741
-                - Please seek professional help if you're experiencing mental health concerns
-            """)
+    except Exception as e:
+        st.error("""
+            Error: Models not found. Please ensure you have run the training script 
+            (train_models.py) before running the app.
+        """)
+        st.exception(e)
 
 if __name__ == "__main__":
     main()
