@@ -119,4 +119,4 @@ def train_and_save_models(data_path):
             print(f"  Test Score: {scores['test_score']:.4f}")
 
 if __name__ == "__main__":
-    train_and_save_models('depression_dataset.csv')  # Replace with your dataset path
+    train_and_save_models('Depression Student Dataset.csv')  # Replace with your dataset path
